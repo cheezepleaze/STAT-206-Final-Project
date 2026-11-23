@@ -13,8 +13,10 @@ struct JackknifePlusOLS{T<:AbstractFloat}
     X_train::Matrix{T}              # Training the design matrix (n x p)
     residuals_loo::Vector{T}        # Absolute LOO residuals (n,)
     weighted_errors::Vector{T}      # (y - y_hat) ./ (1 - h_ii) (n,)
+    leverage::Vector{T} # leverage values for training
     n::Int
     p::Int
+    fit_intercept::Bool # track model intercept use
 end
 
 # Following function, fit_jackknife_plus, fits a fast OLS Jackknife+ estimator in O(np^2 + p^3)
@@ -23,7 +25,9 @@ end
 function fit_jackknife_plus(X::AbstractMatrix{T}, y::AbstractVector;
                             fit_intercept::Bool = true) where {T<:AbstractFloat}
     n, p_raw = size(X)
-    @assert n == length(y)                              # both x and y must match
+    # both x and y must match
+    n == length(y) || throw(DimensionMismatch("X has $n rows but y has $(length(y))"))
+    n > p_raw + (fit_intercept ? 1 : 0) || throw(ArgumentError("need n > number of columns"))
     @assert n > (p_raw + (fit_intercept ? 1 : 0))       # sample size must exceed number of features
 
     # Augment design matrix with bias column if requested
@@ -36,6 +40,7 @@ function fit_jackknife_plus(X::AbstractMatrix{T}, y::AbstractVector;
     XtX_inv = Matrix{T}(chol \ I(p))
 
     # OLS fit
+    y = T.(y) # explicit to keep Float32 type in beta
     beta = XtX_inv * (X_mat' * y)
     y_hat = X_mat * beta
 
@@ -46,16 +51,17 @@ function fit_jackknife_plus(X::AbstractMatrix{T}, y::AbstractVector;
     @inbounds for i in 1:n
         xi = view(X_mat, i, :)
         h[i] = dot(xi, XtX_inv * xi)
-        @assert h[i] < 1.0
     end
+    # check leverage guards after the loop vs assertion inside
+    maximum(h) < 1 - sqrt(eps(T)) || throw(ArgumentError("leverage ~ 1; LOO fit undefined"))
 
     # Closed-form LOO residuals and weighted error vectors
     raw_res = y .- y_hat
-    denom = 1.0 .- h
+    denom = one(T) .- h # use one(T) vs literal 1.0 to avoid Float64 promotion
     weighted_errors = raw_res ./ denom
     residuals_loo = abs.(weighted_errors)
 
-    return JackknifePlusOLS{T}(beta, XtX_inv, X_mat, residuals_loo, weighted_errors,n , p)
+    return JackknifePlusOLS{T}(beta, XtX_inv, X_mat, residuals_loo, weighted_errors, h, n, p, fit_intercept)
 end
 
 # Following function, predict_intervals, calculates (1 - alpha) predicition intervals for X_test

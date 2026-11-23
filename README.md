@@ -1,6 +1,6 @@
 # JackknightPlus.jl
 
-A Julia package for distribution-free predictive inference and unvertainty quantification. It implements the Jackknife+ framework (Barber et al., 2021) with OLS leverage-score optimization.
+A Julia package for distribution-free predictive inference and unvertainty quantification. It implements the Jackknife+ framework ([Barber et al., 2021](https://projecteuclid.org/journals/annals-of-statistics/volume-49/issue-1/Predictive-inference-with-the-jackknife/10.1214/20-AOS1965.pdf)) with OLS leverage-score optimization.
 
 ## Authors
 

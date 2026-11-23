@@ -1,0 +1,172 @@
+---
+title: "Jackknife+ Predictive Inference: Implementation & Benchmarking"
+author: Saulo Bosquez & Adrian Muli
+engine: Julia
+julia:
+   exeflags: ["--project=."]
+---
+
+## Overview
+
+This report runs the **Jackknife+ Predictive Inference** project end-to-end in Julia (based on Barber et al., 2021). It executes your scripts in order:
+
+1. **`JackknifePlus.jl`**: Loads the fast rank-1 OLS leave-one-out implementation.
+2. **`Test.jl`**: Verifies mathematical accuracy against naive refitting and checks empirical coverage.
+3. **`BenchmarkTools.jl`**: Measures runtime speedups across small-to-medium synthetic datasets.
+4. **`benchmark_msd.jl`**: Evaluates predictive intervals and scaling on the `YearPredictionMSD` dataset.
+
+---
+
+## 1. Load Core Module
+
+```{julia}
+using LinearAlgebra
+using Statistics
+using Random
+using Test
+
+include("../src/JackknifePlus.jl")
+using .JackknifePlus
+
+println("JackknifePlus module loaded successfully.")
+```
+
+```{julia}
+include("Test.jl")
+```
+
+```{julia}
+using Plots
+
+# Collect benchmark results across sample sizes
+ns = [50, 100, 200, 400, 800]
+p, m = 5, 20
+times_naive = Float64[]
+times_fast  = Float64[]
+
+for n in ns
+    X_tr = randn(n, p)
+    y_tr = X_tr * ones(p) .+ randn(n)
+    X_te = randn(m, p)
+
+    # Measure median time in milliseconds
+    t_n = @elapsed predict_naive_loo(X_tr, y_tr, X_te; alpha=0.10)
+    t_f = @elapsed begin
+        mod = fit_jackknife_plus(X_tr, y_tr; fit_intercept=true)
+        predict_intervals(mod, X_te; alpha=0.10)
+    end
+
+    push!(times_naive, t_n * 1000)
+    push!(times_fast,  t_f * 1000)
+end
+
+plot(ns, times_naive,
+    label = "Naive LOO Refit O(n²p²)",
+    marker = :circle,
+    linewidth = 2,
+    xscale = :log10,
+    yscale = :log10,
+    xlabel = "Training Sample Size (n)",
+    ylabel = "Execution Time (ms, log scale)",
+    title = "Jackknife+ Computational Scaling",
+    legend = :topleft,
+    grid = true
+)
+
+plot!(ns, times_fast,
+    label = "Fast Rank-1 OLS O(np² + p³)",
+    marker = :diamond,
+    linewidth = 2
+)
+```
+
+```{julia}
+include("BenchmarkTools.jl")
+```
+
+```{julia}
+alphas = [0.05, 0.10, 0.15, 0.20, 0.25, 0.30]
+emp_covs = Float64[]
+
+for a in alphas
+    hits = 0
+    for _ in 1:300
+        X_tr = randn(40, 3)
+        y_tr = X_tr * [1.5, -1.0, 0.5] .+ randn(40)
+        X_te = randn(1, 3)
+        y_te = (X_te * [1.5, -1.0, 0.5])[1] + randn()
+
+        mod = fit_jackknife_plus(X_tr, y_tr)
+        ci = predict_intervals(mod, X_te; alpha=a)
+        hits += (ci[1, 1] <= y_te <= ci[1, 2])
+    end
+    push!(emp_covs, hits / 300)
+end
+
+plot(1.0 .- alphas, emp_covs,
+    label = "Observed Empirical Coverage",
+    marker = :circle,
+    linewidth = 2,
+    xlabel = "Nominal Target Coverage (1 - α)",
+    ylabel = "Empirical Coverage Rate",
+    title = "Distribution-Free Coverage Verification",
+    xlims = (0.68, 0.97),
+    ylims = (0.35, 1.0),
+    legend = :topleft
+)
+
+# Reference lines: Ideal (1 - alpha) and Theoretical Lower Bound (1 - 2*alpha)
+plot!(1.0 .- alphas, 1.0 .- alphas, label = "Nominal Target (1 - α)", linestyle = :dash, color = :gray)
+plot!(1.0 .- alphas, 1.0 .- 2.0 .* alphas, label = "Theoretical Floor (1 - 2α)", linestyle = :dot, color = :red, linewidth = 2)
+```
+
+```{julia}
+include("benchmark_msd.jl")
+```
+
+```{julia}
+# Take first 60 test points from YearPredictionMSD evaluation
+k = 60
+y_sub = y_test_sub[1:k]
+low_sub = intervals[1:k, 1]
+high_sub = intervals[1:k, 2]
+mid_sub = (low_sub .+ high_sub) ./ 2.0
+
+# Identify points inside vs outside the interval
+inside = (y_sub .>= low_sub) .& (y_sub .<= high_sub)
+
+# Plot interval bars using error bars around the midpoint
+p_intervals = plot(1:k, mid_sub,
+    yerror = (mid_sub .- low_sub, high_sub .- mid_sub),
+    seriestype = :scatter,
+    markersize = 2,
+    color = :steelblue,
+    alpha = 0.6,
+    label = "90% Jackknife+ Interval",
+    xlabel = "Test Song Index",
+    ylabel = "Release Year",
+    title = "YearPredictionMSD: Predictive Intervals vs. Ground Truth"
+)
+
+# Overlay ground-truth points (green = covered, red = missed)
+scatter!(p_intervals, findall(inside), y_sub[inside], color = :green, markersize = 4, label = "Covered (In Interval)")
+scatter!(p_intervals, findall(.!inside), y_sub[.!inside], color = :red, marker = :xcross, markersize = 6, label = "Missed (Out of Interval)")
+```
+
+```{julia}
+# Recompute leverage scores from fitted MSD model
+h_scores = [dot(view(model.X_train, i, :), model.XtX_inv * view(model.X_train, i, :)) for i in 1:model.n]
+
+# Sample 2,000 points for a clean scatter plot
+sample_idx = rand(1:model.n, 2000)
+
+scatter(h_scores[sample_idx], model.residuals_loo[sample_idx],
+    alpha = 0.35,
+    markersize = 3,
+    color = :purple,
+    xlabel = "Leverage Score (hᵢᵢ)",
+    ylabel = "Absolute LOO Residual |yᵢ - ŷ₋ᵢ(xᵢ)| (Years)",
+    title = "Influence of Leverage on LOO Residuals (YearPredictionMSD)",
+    legend = false
+)
+```

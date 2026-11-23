@@ -10,7 +10,7 @@ using Statistics
 using BenchmarkTools
 
 if !@isdefined(JackknifePlus)
-    include("JackknifePlus.jl")
+    include("../src/JackknifePlus.jl")
 end
 using .JackknifePlus
 
@@ -23,8 +23,8 @@ println("="^60)
 println("YEARPREDICTIONMSD BENCHMARK FOR JACKKNIFE+")
 println("="^60)
 
-local_zip_path = "YearPredictionMSD.txt.zip"
-local_txt_path = "YearPredictionMSD.txt"
+local_zip_path = "../data/YearPredictionMSD.txt.zip"
+local_txt_path = "../data/YearPredictionMSD.txt"
 
 if !isfile(local_txt_path)
     if !isfile(local_zip_path)

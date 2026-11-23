@@ -2,7 +2,7 @@ using BenchmarkTools
 using Random
 
 if !@isdefined(JackknifePlus)
-    include("JackknifePlus.jl")
+    include("../src/JackknifePlus.jl")
 end
 using .JackknifePlus
 
